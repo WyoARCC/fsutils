@@ -77,6 +77,9 @@ def WalkDirTree(top,lvl=0):
         uid = fstat.st_uid
         gid = fstat.st_gid
 
+        new_uid = UID_MAP[uid]
+        new_gid = GID_MAP[gid]
+
         if 0 < stat.S_ISLNK(mode):
         #if os.path.islink(pathname):
             # I shouldn't need the warning anymore, symlinks now managed as per man 2 lchown
@@ -84,7 +87,7 @@ def WalkDirTree(top,lvl=0):
             abslink = os.path.join(top,drflink)
             
             PrintWarn( "symlink: %s -> %s" % (pathname,abslink))
-            os.lchown(pathname,UID_MAP[uid],GID_MAP[gid])
+            os.lchown(pathname,new_uid,new_gid)
 
             if SYMLINK_OVERRIDE:
                 drfstat = os.lstat(abslink)
