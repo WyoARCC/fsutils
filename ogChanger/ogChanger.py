@@ -55,7 +55,19 @@ def CheckLinkDir(mode,dir):
         return 1
     return 0
 
-def WalkDirTree(top,lvl=0):
+def checkUID(uid):
+    if uid not in UID_MAP.keys():
+        PrintWarn( "uid: %d not in the UID_MAP. Not changing user on %s" % (uid,pathname) )
+        return -1
+    return UID_MAP[uid]
+
+def checkGID(gid):
+    if gid not in GID_MAP.keys():
+        PrintWarn( "gid: %d not in the GID_MAP. Not changing group on %s" % (gid,pathname) )
+        return -1
+    return GID_MAP[gid]
+
+def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
     tstat = os.lstat(top)
     mode = tstat.st_mode
     uid = tstat.st_uid
@@ -77,8 +89,15 @@ def WalkDirTree(top,lvl=0):
         uid = fstat.st_uid
         gid = fstat.st_gid
 
-        new_uid = UID_MAP[uid]
-        new_gid = GID_MAP[gid]
+        if ignore_uid:
+            new_uid = -1
+        else:
+            new_uid = checkUID(uid)
+
+        if ignore_gid:
+            new_gid = -1
+        else:
+            new_gid = checkGID(gid)
 
         if 0 < stat.S_ISLNK(mode):
         #if os.path.islink(pathname):
@@ -97,7 +116,7 @@ def WalkDirTree(top,lvl=0):
             continue
 
         if 0 < stat.S_ISDIR(mode):
-            WalkDirTree(pathname,lvl=lvl+1)
+            WalkDirTree(pathname,lvl=lvl+1,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
             continue
 
         if stat.S_ISREG(mode):
@@ -115,18 +134,39 @@ def main():
     global SYMLINK_OVERRIDE
     pvers = "%d.%d.%d"%(__MAJOR__,__MINOR__,__RELEASE__);
     parser = ap.ArgumentParser()
+
     parser.add_argument("-V","--version",action="version", version="%%(prog)s (%s)"%(pvers))
+
     parser.add_argument("-v","--verbose",action="count",help="scalable verbose output")
+
+    parser.add_argument("-d","--dry-run",action="store_true",default=False,
+            help="Do a dry run. Still scans all the metadata and calls the chown, but with non-changing values.")
+
+    parser.add_argument("-iu","--ignore-uid",action="store_true",default=False,
+            help="Do NOT change the UID of the files")
+
+    parser.add_argument("-ig","--ignore-gid",action="store_true",default=False,
+            help="Do NOT change the GID of the files")
+    
     parser.add_argument("dir", type=str, nargs='+',help="directories to recursively modify permissions")
+    
     parser.add_argument("-s","--follow-symlinks",action="store_true",default=False,
             help="Follow symbolic links. WARNING: May cause large overhead and repeat system calls!")
+    
     args = parser.parse_args()
 
     SYMLINK_OVERRIDE = args.follow_symlinks
 
+    ignore_uid = args.ignore_uid
+    ignore_gid = args.ignore_gid
+
+    if args.dry_run is True:
+        ignore_uid=True
+        ignore_gid=True
+
     print ""
     for each in args.dir:
-        WalkDirTree( os.path.abspath(each) )
+        WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
         print ""
     return 0
 
