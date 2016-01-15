@@ -72,7 +72,7 @@ def GenerateMap(map_file=""):
         return 1
 
     if not os.path.isfile(map_file):
-        PrintError("Map file %s does not exist. Check map file location." %(map_file))
+        PrintError("Map file '%s' does not exist. Check map file location." %(map_file))
         return 2
 
     parser = cp.ConfigParser()
@@ -274,7 +274,9 @@ def main():
     PrintDebug("map file is : %s" %(args.map_file),debug=1)
     map_code = GenerateMap(args.map_file)
     if map_code:
-        Print("uh oh")
+        sys.exit(map_code)
+    
+    # Loop over the directory(ies)
     Print("")
     for each in args.dir:
         WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
