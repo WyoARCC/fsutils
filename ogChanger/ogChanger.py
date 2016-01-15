@@ -31,11 +31,12 @@ GID_MAP[80000] = 20044
 #
 
 # Some simple GLOBALS
+DEBUG=0
 SYMLINK_OVERRIDE = False
 VERBOSE = 0
 
 def Print(xstring,verbose=0):
-    if verbose >= VERBOSE:
+    if verbose <= VERBOSE:
         sys.stdout.write(xstring + "\n")
     return
 
@@ -45,6 +46,11 @@ def PrintError(xstring):
 
 def PrintWarn(xstring):
     sys.stderr.write("\nWarning: " + str(xstring) + "\n\n")
+    return
+
+def PrintDebug(xstring,debug=0):
+    if debug <= DEBUG:
+        sys.stderr.write("Debug[%d]: %s \n" % (int(debug),str(xstring)))
     return
 
 def CheckLinkDir(mode,dir):
@@ -92,9 +98,11 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
     if ignore_gid: 
         new_gid = -1
     else: 
-        new_gid = checkGID(uid)
+        new_gid = checkGID(gid)
 
-    Print(lvl*' ' + top)
+    Print("(uid,gid) = (%d,%d)" % (new_uid,new_gid),verbose=2)
+    PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,top) , debug=3)
+    Print(lvl*' ' + top,verbose=1)
     try:
         os.lchown(top,new_uid,new_gid)
     except:
@@ -116,7 +124,6 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             new_gid = -1
         else:
             new_gid = checkGID(gid)
-        Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=1)
 
         if 0 < stat.S_ISLNK(mode):
         #if os.path.islink(pathname):
@@ -125,6 +132,11 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             abslink = os.path.join(top,drflink)
             
             PrintWarn( "symlink: %s -> %s" % (pathname,abslink))
+
+            Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=2)
+            PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,pathname) , debug=3)
+            Print((lvl+1)*' ' + pathname,verbose=1)
+
             os.lchown(pathname,new_uid,new_gid)
 
             if SYMLINK_OVERRIDE:
@@ -139,6 +151,8 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             continue
 
         if stat.S_ISREG(mode):
+            Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=2)
+            PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,pathname) , debug=3)
             Print((lvl+1)*' ' + pathname,verbose=1)
             try:
                 os.chown(pathname,new_uid,new_gid)
@@ -150,6 +164,7 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
 
 
 def main():
+    global DEBUG
     global SYMLINK_OVERRIDE
     global VERBOSE
 
@@ -158,7 +173,9 @@ def main():
 
     parser.add_argument("-V","--version",action="version", version="%%(prog)s (%s)"%(pvers))
 
-    parser.add_argument("-v","--verbose",action="count",default=0,help="scalable verbose output")
+    parser.add_argument("-v","--verbose",action="count",default=0,help="scalable verbose output (STDOUT)")
+
+    parser.add_argument("-D","--debug",action="count",default=0,help="scalable debugging output (STDERR)")
 
     parser.add_argument("-d","--dry-run",action="store_true",default=False,
             help="Do a dry run. Still scans all the metadata and calls the chown, but with non-changing values.")
@@ -176,6 +193,8 @@ def main():
     
     args = parser.parse_args()
 
+    DEBUG = args.debug
+    PrintDebug("Debugging set at %d" % (DEBUG),debug=1)
     SYMLINK_OVERRIDE = args.follow_symlinks
     VERBOSE = args.verbose
     Print("verbose level = %d" % ( args.verbose ), verbose=1 )
