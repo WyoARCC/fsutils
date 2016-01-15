@@ -14,26 +14,37 @@ __RELEASE__ = 0
 import os, sys
 import stat
 import argparse as ap
+import ConfigParser as cp
 
-# 
-# Beg Example Mappings - use a file to construct a larger mapping
-#
-UID_MAP = {}
-UID_MAP[0]     = 0
-UID_MAP[20044] = 20044
+MAP = { 
+        'uid': {}, 
+        'gid': {}
+        }
 
-GID_MAP = {}
-GID_MAP[0]     = 0
-GID_MAP[20044] = 80000
-GID_MAP[80000] = 20044
-#
-# End Example Mappings
-#
+# Aliases for the MAP dictionary right now:
+UID_MAP = MAP['uid']
+GID_MAP = MAP['gid']
 
 # Some simple GLOBALS
 DEBUG=0
 SYMLINK_OVERRIDE = False
 VERBOSE = 0
+
+def PrintUsage():
+    return
+
+def PrintMapExample():
+    sys.stdout.write("\n" + "\n".join("""
+    [uid]
+    1000=300000
+    1005=300001
+    [gid]
+    1000=300000
+    1005=300000
+    5000=1000000
+    5001=1000001
+    """.split() ) + "\n\n")
+    return
 
 def Print(xstring,verbose=0):
     if verbose <= VERBOSE:
@@ -41,17 +52,39 @@ def Print(xstring,verbose=0):
     return
 
 def PrintError(xstring):
-    sys.stderr.write("\nError: " + str(xstring) + "\n\n")
+    sys.stderr.write("Error: " + str(xstring) + "\n")
     return
 
 def PrintWarn(xstring):
-    sys.stderr.write("\nWarning: " + str(xstring) + "\n\n")
+    sys.stderr.write("Warning: " + str(xstring) + "\n")
     return
 
 def PrintDebug(xstring,debug=0):
     if debug <= DEBUG:
         sys.stderr.write("Debug[%d]: %s \n" % (int(debug),str(xstring)))
     return
+
+def GenerateMap(map_file=""):
+    global MAP
+    
+    if map_file == "":
+        PrintError("map_file call is empty, please specify the map file")
+        return 1
+
+    if not os.path.isfile(map_file):
+        PrintError("Map file %s does not exist. Check map file location." %(map_file))
+        return 2
+
+    parser = cp.ConfigParser()
+    parser.read(map_file)
+    sections = ['uid','gid']
+    for s in sections:
+        if s not in parser.sections():
+            PrintError("There is no %s section defined in the map file. Exiting.")
+            sys.exit(1)
+        for name,value in parser.items(s):
+            MAP[s][ int(name) ] = int(value)
+    return 0
 
 def CheckLinkDir(mode,dir):
     # Be careful, mode must come from lstat, NOT stat.
@@ -65,23 +98,16 @@ def CheckLinkDir(mode,dir):
         return 1
     return 0
 
-def checkUID(uid):
-    # Implicitly do not change root user ownership
-    if uid == 0: return -1
-    if uid not in UID_MAP.keys():
-        PrintWarn( "uid: %d not in the UID_MAP. Not changing user on %s" % (uid,pathname) )
+def checkID(tid,nid):
+    if nid == 0: return 0
+    try:
+        new_id = MAP[tid][nid]
+        return new_id
+    except KeyError:
         return -1
-    return UID_MAP[uid]
-
-def checkGID(gid):
-    # Implicitly do not change root group ownership
-    if gid == 0: return -1
-    if gid not in GID_MAP.keys():
-        PrintWarn( "gid: %d not in the GID_MAP. Not changing group on %s" % (gid,pathname) )
-        return -1
-    return GID_MAP[gid]
 
 def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
+    CHOWN = False
     tstat = os.lstat(top)
     mode = tstat.st_mode
     uid = tstat.st_uid
@@ -93,20 +119,27 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
     if ignore_uid: 
         new_uid = -1
     else: 
-        new_uid = checkUID(uid)
+        new_uid = checkID('uid',uid)
+        if -1 == new_uid:
+            PrintWarn("%s: %d not in the %s map. Not changing %s on %s" % ('uid',uid,'uid','uid',top))
 
     if ignore_gid: 
         new_gid = -1
     else: 
-        new_gid = checkGID(gid)
+        new_gid = checkID('gid',gid)
+        if -1 == new_gid:
+            PrintWarn("%s: %d not in the %s map. Not changing %s on %s" % ('gid',gid,'gid','gid',top))
 
-    Print("(uid,gid) = (%d,%d)" % (new_uid,new_gid),verbose=2)
-    PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,top) , debug=3)
+    Print("(uid,gid) = (%d,%d)" % (new_uid,new_gid),verbose=3)
+    PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,top), debug=3)
+
+    if -2 != new_uid + new_gid: CHOWN=True
+
     Print(lvl*' ' + top,verbose=1)
     try:
-        os.lchown(top,new_uid,new_gid)
+        if CHOWN: os.lchown(top,new_uid,new_gid)
     except:
-        PrintError( "chown: %s" % (top) )
+        PrintError( "chown: Likely have incorrect permissions to change %s" % (top) )
 
     for f in os.listdir(top):
         pathname = os.path.join(top,f)
@@ -114,16 +147,27 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
         mode = fstat.st_mode
         uid = fstat.st_uid
         gid = fstat.st_gid
+        
+        # If directory, walk recursively, but avoid extra uid/gid checking.
+        if 0 < stat.S_ISDIR(mode):
+            WalkDirTree(pathname,lvl=lvl+1,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
+            continue
 
         if ignore_uid:
             new_uid = -1
         else:
-            new_uid = checkUID(uid)
+            new_uid = checkID('uid',uid)
+            if -1 == new_uid:
+                PrintWarn("%s: %d not in the %s map. Not changing %s on %s" % ('uid',uid,'uid','uid',pathname))
 
         if ignore_gid:
             new_gid = -1
         else:
-            new_gid = checkGID(gid)
+            new_gid = checkID('gid',gid)
+            if -1 == new_gid:
+                PrintWarn("%s: %d not in the %s map. Not changing %s on %s" % ('gid',gid,'gid','gid',pathname))
+
+        if -2 != (new_uid + new_gid): CHOWN = True
 
         if 0 < stat.S_ISLNK(mode):
         #if os.path.islink(pathname):
@@ -137,7 +181,10 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,pathname) , debug=3)
             Print((lvl+1)*' ' + pathname,verbose=1)
 
-            os.lchown(pathname,new_uid,new_gid)
+            try:
+                if CHOWN: os.lchown(pathname,new_uid,new_gid)
+            except:
+                PrintError("chown: Likely have incorrect permissions to change %s" % (pathname))
 
             if SYMLINK_OVERRIDE:
                 drfstat = os.lstat(abslink)
@@ -146,18 +193,14 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
                     WalkDirTree(pathname,lvl=lvl+1)
             continue
 
-        if 0 < stat.S_ISDIR(mode):
-            WalkDirTree(pathname,lvl=lvl+1,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
-            continue
-
         if stat.S_ISREG(mode):
-            Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=2)
+            Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=3)
             PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,pathname) , debug=3)
             Print((lvl+1)*' ' + pathname,verbose=1)
             try:
-                os.chown(pathname,new_uid,new_gid)
+                if CHOWN: os.chown(pathname,new_uid,new_gid)
             except:
-                PrintError( "chown: %s" % (pathname))
+                PrintError( "chown: Likely have incorrect permssions to change %s" % (pathname))
             continue
 
         # Don't do other types of files ... devices, character files, named pipes, etc.
@@ -169,7 +212,9 @@ def main():
     global VERBOSE
 
     pvers = "%d.%d.%d"%(__MAJOR__,__MINOR__,__RELEASE__);
-    parser = ap.ArgumentParser()
+    parser = ap.ArgumentParser(
+            description = "An application to apply a massive numerical UID/GID change recursively on a directory or set of directories",
+            epilog = "An example map file can be printed using the --map-example argument.")
 
     parser.add_argument("-V","--version",action="version", version="%%(prog)s (%s)"%(pvers))
 
@@ -178,24 +223,42 @@ def main():
     parser.add_argument("-D","--debug",action="count",default=0,help="scalable debugging output (STDERR)")
 
     parser.add_argument("-d","--dry-run",action="store_true",default=False,
-            help="Do a dry run. Still scans all the metadata and calls the chown, but with non-changing values.")
+            help="Do a dry run. Scans all the meta-data, but does not call the chown")
 
-    parser.add_argument("-iu","--ignore-uid",action="store_true",default=False,
-            help="Do NOT change the UID of the files")
+    parser.add_argument("-u","--ignore-uid",action="store_true",default=False,
+            help="Do NOT change the UID of the files. If used with [-g|--ignore-gid] equal to [-d|--dry-run]")
 
-    parser.add_argument("-ig","--ignore-gid",action="store_true",default=False,
-            help="Do NOT change the GID of the files")
+    parser.add_argument("-g","--ignore-gid",action="store_true",default=False,
+            help="Do NOT change the GID of the files. If used with [-u|--ignore-uid] equal to [-d|--dry-run]")
     
-    parser.add_argument("dir", type=str, nargs='+',help="directories to recursively modify permissions")
+    parser.add_argument("-m","--map_file", type=str, default="", help="file describing the UID/GID mapping. See --map-help.")
+    
+    parser.add_argument("dir", type=str, nargs='*',help="directories to recursively modify permissions")
     
     parser.add_argument("-s","--follow-symlinks",action="store_true",default=False,
             help="Follow symbolic links. WARNING: May cause large overhead and repeat system calls!")
-    
+   
+    parser.add_argument("-U","--usage",action="store_true", default=False, help="Quick overview on how the application works.")
+
+    parser.add_argument("--map-example",action="store_true", default=False, help="Print out a map file example to STDOUT.")
+
     args = parser.parse_args()
+
+    if args.usage:
+        PrintUsage()
+        return 0
+
+    if args.map_example:
+        PrintMapExample()
+        return 0
 
     DEBUG = args.debug
     PrintDebug("Debugging set at %d" % (DEBUG),debug=1)
+    
     SYMLINK_OVERRIDE = args.follow_symlinks
+    if args.follow_symlinks:
+        PrintWarn("You've chosen to follow symbolic links; Be wary of symbolic link loops!!!")
+    
     VERBOSE = args.verbose
     Print("verbose level = %d" % ( args.verbose ), verbose=1 )
 
@@ -206,7 +269,12 @@ def main():
         Print("Running in Dry-run mode")
         ignore_uid=True
         ignore_gid=True
-
+    
+    # Generate the UID/GID maps
+    PrintDebug("map file is : %s" %(args.map_file),debug=1)
+    map_code = GenerateMap(args.map_file)
+    if map_code:
+        Print("uh oh")
     Print("")
     for each in args.dir:
         WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
