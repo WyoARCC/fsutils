@@ -7,8 +7,6 @@
 # Purpose:  To massively change NUID/NGID on filesystem
 #           where explicit mappings can be used.
 #
-# Notes:    Highly likely not to work in Python3. Abstract prints later.
-#
 __MAJOR__ = 0
 __MINOR__ = 1
 __RELEASE__ = 0
@@ -32,8 +30,14 @@ GID_MAP[80000] = 20044
 # End Example Mappings
 #
 
-
+# Some simple GLOBALS
 SYMLINK_OVERRIDE = False
+VERBOSE = 0
+
+def Print(xstring,verbose=0):
+    if verbose >= VERBOSE:
+        sys.stdout.write(xstring + "\n")
+    return
 
 def PrintError(xstring):
     sys.stderr.write("\nError: " + str(xstring) + "\n\n")
@@ -56,12 +60,16 @@ def CheckLinkDir(mode,dir):
     return 0
 
 def checkUID(uid):
+    # Implicitly do not change root user ownership
+    if uid == 0: return -1
     if uid not in UID_MAP.keys():
         PrintWarn( "uid: %d not in the UID_MAP. Not changing user on %s" % (uid,pathname) )
         return -1
     return UID_MAP[uid]
 
 def checkGID(gid):
+    # Implicitly do not change root group ownership
+    if gid == 0: return -1
     if gid not in GID_MAP.keys():
         PrintWarn( "gid: %d not in the GID_MAP. Not changing group on %s" % (gid,pathname) )
         return -1
@@ -76,9 +84,19 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
     result = CheckLinkDir(mode,top)
     if 0 < result: return result
 
-    print lvl*' ' + top
+    if ignore_uid: 
+        new_uid = -1
+    else: 
+        new_uid = checkUID(uid)
+
+    if ignore_gid: 
+        new_gid = -1
+    else: 
+        new_gid = checkGID(uid)
+
+    Print(lvl*' ' + top)
     try:
-        os.lchown(top,UID_MAP[uid],GID_MAP[gid])
+        os.lchown(top,new_uid,new_gid)
     except:
         PrintError( "chown: %s" % (top) )
 
@@ -98,6 +116,7 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             new_gid = -1
         else:
             new_gid = checkGID(gid)
+        Print("(uid,gid) = (%d,%d)" %(new_uid,new_gid),verbose=1)
 
         if 0 < stat.S_ISLNK(mode):
         #if os.path.islink(pathname):
@@ -120,9 +139,9 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
             continue
 
         if stat.S_ISREG(mode):
-            print (lvl+1)*' ' + pathname
+            Print((lvl+1)*' ' + pathname,verbose=1)
             try:
-                os.chown(pathname,UID_MAP[uid],GID_MAP[gid])
+                os.chown(pathname,new_uid,new_gid)
             except:
                 PrintError( "chown: %s" % (pathname))
             continue
@@ -132,12 +151,14 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
 
 def main():
     global SYMLINK_OVERRIDE
+    global VERBOSE
+
     pvers = "%d.%d.%d"%(__MAJOR__,__MINOR__,__RELEASE__);
     parser = ap.ArgumentParser()
 
     parser.add_argument("-V","--version",action="version", version="%%(prog)s (%s)"%(pvers))
 
-    parser.add_argument("-v","--verbose",action="count",help="scalable verbose output")
+    parser.add_argument("-v","--verbose",action="count",default=0,help="scalable verbose output")
 
     parser.add_argument("-d","--dry-run",action="store_true",default=False,
             help="Do a dry run. Still scans all the metadata and calls the chown, but with non-changing values.")
@@ -156,19 +177,22 @@ def main():
     args = parser.parse_args()
 
     SYMLINK_OVERRIDE = args.follow_symlinks
+    VERBOSE = args.verbose
+    Print("verbose level = %d" % ( args.verbose ), verbose=1 )
 
     ignore_uid = args.ignore_uid
     ignore_gid = args.ignore_gid
 
     if args.dry_run is True:
+        Print("Running in Dry-run mode")
         ignore_uid=True
         ignore_gid=True
 
-    print ""
+    Print("")
     for each in args.dir:
         WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
-        print ""
+        Print("")
     return 0
 
-    
+# Run the main app
 if __name__ == "__main__": main()
