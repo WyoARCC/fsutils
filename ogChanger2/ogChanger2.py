@@ -16,6 +16,8 @@ import stat
 import argparse as ap
 import ConfigParser as cp
 
+from multiprocessing import Pool,JoinableQueue
+
 MAP = { 
         'uid': {}, 
         'gid': {}
@@ -205,6 +207,39 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
 
         # Don't do other types of files ... devices, character files, named pipes, etc.
 
+def process_dir(q,dirname):
+    for each in os.listdir(dirname):
+        abs_fname = os.path.abspath( os.pathjoin(dirname,each) )
+        process_file(q,abs_fname)
+    return 0
+
+def process_file(q,fname):
+    fstat = os.lstat(fname)
+    mode = fstat.st_mode
+    uid = fstat.st_uid
+    gid = fstat.st_gid
+
+    if stat.S_ISDIR(mode):
+        os.chown(fname,MAP['uid'][uid],MAP['gid'][gid])
+        q.put(fname)
+        return 0
+
+    if stat.S_ISREG(mode):
+        os.chown(fname,MAP['uid'][uid],MAP['gid'][gid])
+        return 0
+
+    if stat.S_ISLNK(mode):
+        os.lchown(fname,MAP['uid'][uid],MAP['gid'][gid])
+        return 0
+
+def queue_worker(q):
+    while True:
+        try:
+            dir_name = q.get()
+            process_dir(q,dir_name)
+            q.task_done()
+        except:
+            break
 
 def main():
     global DEBUG
@@ -237,6 +272,9 @@ def main():
     
     parser.add_argument("-s","--follow-symlinks",action="store_true",default=False,
             help="Follow symbolic links. WARNING: May cause large overhead and repeat system calls!")
+
+    parser.add_argument("-q","--use-queue",action="store",type=int,default=0,metavar="N",
+            help="Use a multiprocessing queue recursion with 'N' processes/threads rather than standard serialized recursion")
    
     parser.add_argument("-U","--usage",action="store_true", default=False, help="Quick overview on how the application works.")
 
@@ -276,7 +314,17 @@ def main():
     if map_code:
         sys.exit(map_code)
     
-    # Loop over the directory(ies)
+    if args.use_queue > 0:
+        dir_queue = JoinableQueue()
+        ppool = Pool(args.use_queue,queue_worker,(dir_queue,))
+
+        for each in args.dir:
+            q.put( os.path.abspath(each) )
+            Print(each,verbose=0)
+
+        return 0
+
+    # Loop over the directory(ies) using serialized recursion
     Print("")
     for each in args.dir:
         WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
