@@ -16,6 +16,8 @@ import stat
 import argparse as ap
 import ConfigParser as cp
 
+from multiprocessing import Pool,JoinableQueue
+
 MAP = { 
         'uid': {}, 
         'gid': {}
@@ -104,6 +106,7 @@ def checkID(tid,nid):
         new_id = MAP[tid][nid]
         return new_id
     except KeyError:
+        PrintDebug("KeyError: no %s mapping from %d. Setting to -1." % (tid,nid),debug=1)
         return -1
 
 def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
@@ -205,6 +208,58 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
 
         # Don't do other types of files ... devices, character files, named pipes, etc.
 
+def q_process_dir(q,dir_name,ignore_uid,ignore_gid):
+    for each in os.listdir(dir_name):
+        abs_fname = os.path.abspath( os.path.join(dir_name,each) )
+        Print(abs_fname,verbose=0)
+        q_process_file(q,abs_fname,ignore_uid,ignore_gid)
+    return 0
+
+def q_process_file(q,fname,ignore_uid,ignore_gid):
+    CHOWN = False
+    fstat = os.lstat(fname)
+    mode = fstat.st_mode
+    uid = fstat.st_uid
+    gid = fstat.st_gid
+
+    if ignore_uid:
+        new_uid = -1
+    else:
+        new_uid = checkID('uid',uid)
+
+    if ignore_gid:
+        new_gid = -1
+    else:
+        new_gid = checkID('gid',gid)
+
+    if -2 != (new_uid + new_gid): CHOWN = True
+
+    Print("(uid,gid) = (%d,%d)" % (new_uid,new_gid), verbose=3)
+    PrintDebug("uid change: %d -> %d ; gid change: %d -> %d ; %s" % (uid,new_uid,gid,new_gid,fname) , debug=3)
+
+    # The chown is located inside the file checks to ingore block files,
+    # character devices, named pipes, and UNIX sockets
+    if stat.S_ISDIR(mode):
+        if CHOWN: os.chown(fname,new_uid,new_gid)
+        q.put(fname)
+        return 0
+
+    if stat.S_ISREG(mode):
+        if CHOWN: os.chown(fname,new_uid,new_gid)
+        return 0
+
+    if stat.S_ISLNK(mode):
+        if CHOWN: os.lchown(fname,new_uid,new_gid)
+        return 0
+
+def queue_worker(q,ignore_uid,ignore_gid):
+    while True:
+        try:
+            dir_name = q.get()
+            q_process_dir(q,dir_name,ignore_uid,ignore_gid)
+            q.task_done()
+        except:
+            break
 
 def main():
     global DEBUG
@@ -237,6 +292,9 @@ def main():
     
     parser.add_argument("-s","--follow-symlinks",action="store_true",default=False,
             help="Follow symbolic links. WARNING: May cause large overhead and repeat system calls!")
+
+    parser.add_argument("-q","--use-queue",action="store",type=int,default=0,metavar="N",
+            help="Use a multiprocessing queue recursion with 'N' processes/threads rather than standard serialized recursion")
    
     parser.add_argument("-U","--usage",action="store_true", default=False, help="Quick overview on how the application works.")
 
@@ -276,11 +334,25 @@ def main():
     if map_code:
         sys.exit(map_code)
     
-    # Loop over the directory(ies)
-    Print("")
-    for each in args.dir:
-        WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
+    if args.use_queue > 0:
+        dir_queue = JoinableQueue()
+
+        ppool = Pool(args.use_queue,queue_worker,(dir_queue,ignore_uid,ignore_gid,))
+
+        for each in args.dir:
+            dir_name = os.path.abspath(each)
+            Print(dir_name,verbose=0)
+            q_process_dir(dir_queue,dir_name,ignore_uid,ignore_gid)
+            
+        dir_queue.join()
+
+    else:
+        # Loop over the directory(ies) using serialized recursion
         Print("")
+        for each in args.dir:
+            WalkDirTree( os.path.abspath(each), lvl=0,ignore_uid=ignore_uid,ignore_gid=ignore_gid)
+            Print("")
+
     return 0
 
 # Run the main app
