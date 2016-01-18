@@ -211,7 +211,7 @@ def WalkDirTree(top,lvl=0,ignore_uid=False,ignore_gid=False):
 def q_process_dir(q,dir_name,ignore_uid,ignore_gid):
     for each in os.listdir(dir_name):
         abs_fname = os.path.abspath( os.path.join(dir_name,each) )
-        Print(abs_fname,verbose=0)
+        Print(abs_fname,verbose=1)
         q_process_file(q,abs_fname,ignore_uid,ignore_gid)
     return 0
 
